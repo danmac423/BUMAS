@@ -1,0 +1,49 @@
+[project]
+name = "lab_1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "kornia>=0.9.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.4",
+    "opencv-python>=5.0.0.93",
+    "pandas>=3.1.0",
+    "pillow>=13.0.0",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "tabulate>=0.10.0",
+    "torch>=2.14.1",
+    "torchattacks>=3.5.1",
+    "torchvision>=0.29.1",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+lab_1 = "lab_1.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "pre-commit>=4.0.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.17.1",
+    "ty>=0.0.89",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["src"]
