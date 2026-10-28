@@ -222,3 +222,7 @@ __marimo__/
 .streamlit/secrets.toml
 # model weights (provided with the assignment, 44 MB)
 src/lab_1/model/resnet18_tin.pt
+
+# igcausal outputs
+artifacts/
+submission*.csv
