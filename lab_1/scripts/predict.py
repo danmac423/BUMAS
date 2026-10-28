@@ -16,7 +16,7 @@ from lab_1.data import ROOT, get_device, load_images, load_model, load_test_ids
 from lab_1.occlusion import box, compute_deltas, heatmap
 from lab_1.scoring import BOX_COLS
 
-CHUNK = 529
+CHUNK = 2048
 
 
 @torch.no_grad()
