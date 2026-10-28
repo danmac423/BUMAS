@@ -6,17 +6,11 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "kornia>=0.9.0",
-    "matplotlib>=3.11.2",
-    "numpy>=2.5.4",
-    "opencv-python>=5.0.0.93",
     "pandas>=3.1.0",
     "pillow>=13.0.0",
     "scikit-learn>=1.9.1",
-    "scipy>=1.18.1",
     "tabulate>=0.10.0",
-    "torch>=2.14.1",
-    "torchattacks>=3.5.1",
-    "torchvision>=0.29.1",
+    "torch>=2.11.0",
     "tqdm>=4.70.1",
 ]
 
@@ -29,7 +23,6 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "ipykernel>=7.4.0",
     "pre-commit>=4.0.0",
     "pytest>=9.1.1",
     "pytest-cov>=6.0.0",
@@ -47,3 +40,11 @@ addopts = "-ra --strict-markers"
 
 [tool.coverage.run]
 source = ["src"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
