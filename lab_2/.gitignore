@@ -2,3 +2,5 @@ example/
 test
 cache*
 .DS_Store
+_pycache_/
+*.pyc
