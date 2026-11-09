@@ -100,7 +100,7 @@ def load_clean(root, classes):
 
 
 def read_train_labels(root, classes):
-    df = pd.read_csv(os.path.join(root, "train", "labels.csv"))
+    df = pd.read_csv(os.path.join(root, "train", "labels.csv"), dtype=str)  # str: avoid "15.0" from NaN-induced floats
     idcol = "id" if "id" in df.columns else df.columns[0]
     out = {}
     for _, r in df.iterrows():
