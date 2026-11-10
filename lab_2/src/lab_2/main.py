@@ -10,12 +10,13 @@ Layout (relative to the lab_2 directory):
 
 Usage:
     # 1) compute statistics (cached per model in cache_m1/, can be interrupted and resumed)
-    uv run python -m lab_2.main extract                       # with "uap" (recommended on GPU)
+    uv run python -m lab_2.main extract                       # with "uap" + per-source "uap_src" (recommended on GPU)
     uv run python -m lab_2.main extract --no-uap              # gradient-free statistics only (fast, e.g. on M1)
+    uv run python -m lab_2.main extract --no-uap-src           # skip the (slower) per-source targeted-backdoor pass
 
     # 2) calibration, AUC on training models, submission file
     uv run python -m lab_2.main score --out submission_m1.csv
-    uv run python -m lab_2.main score --stats attract_maxsrc,uap_margin   # choose statistics to combine
+    uv run python -m lab_2.main score --stats attract_maxsrc,uap_margin,uap_maxsrc_margin   # choose statistics to combine
 """
 
 import argparse
@@ -36,6 +37,17 @@ def main():
     e.add_argument("--no-uap", action="store_true", help="skip gradient-based statistics (faster)")
     e.add_argument("--eps", type=float, default=6.0, help="L_inf perturbation budget, in units of /255")
     e.add_argument("--steps", type=int, default=20, help="PGD steps per class")
+    e.add_argument(
+        "--no-uap-src",
+        action="store_true",
+        help="skip per-(source,target) UAP statistics (targeted-backdoor signal, ~2x slower extract)",
+    )
+    e.add_argument(
+        "--eps-src",
+        type=float,
+        default=4.0,
+        help="L_inf budget for per-source UAP, in units of /255 (smaller than --eps: fit on half the images per class)",
+    )
     e.add_argument("--force", action="store_true", help="recompute even if the cache exists")
 
     s = sub.add_parser("score")

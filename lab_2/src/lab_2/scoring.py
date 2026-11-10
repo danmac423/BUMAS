@@ -64,6 +64,17 @@ def cmd_score(args):
     ZA[:, idx, idx] = -np.inf
     Z["attract_maxsrc"] = ZA.max(axis=1)
 
+    # same idea, but for the per-source UAP transfer success/margin (targeted backdoors):
+    # a backdoor that only fires for one source class is drowned out by uap_succ/uap_margin's
+    # single perturbation fit on all other classes at once, but shows up here as a single
+    # large (source, target) entry.
+    for raw_name, z_name in [("uap_src_succ", "uap_maxsrc_succ"), ("uap_src_margin", "uap_maxsrc_margin")]:
+        if all(raw_name in r for r in raw):
+            US = np.stack([r[raw_name] for r in raw]).astype(np.float64)  # (M, C, C): [m, s, c]
+            ZUS = robust_z(US, axis=0)
+            ZUS[:, idx, idx] = -np.inf  # s == c is never computed (always 0) - exclude from the max
+            Z[z_name] = ZUS.max(axis=1)
+
     # deviation of a weight row from the population's "typical" row for that class
     if all("Wn" in r for r in raw):
         Wn = np.stack([r["Wn"] for r in raw]).astype(np.float32)  # (M, C, D)

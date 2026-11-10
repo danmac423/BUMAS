@@ -89,6 +89,65 @@ def uap_stats(net, x, y, device, eps, steps):
     return {"uap_succ": succ, "uap_margin": margin}
 
 
+def uap_src_stats(net, x, y, device, eps, steps):
+    """Per-(source, target) universal perturbations - catches *targeted* backdoors.
+
+    uap_stats fits one perturbation shared by all other classes at once, so a
+    backdoor that only fires for a single source class drowns in the average
+    (it moves ~1/(C-1) of the images). Here, for each target class c we fit a
+    *separate* perturbation per source class s != c, all in the same batch
+    (one delta per source, each getting gradient only from its own source's
+    images) - so the cost is the same number of forward/backward passes as
+    uap_stats, just with more deltas.
+
+    To avoid the perturbation simply overfitting the handful of clean images
+    (which would push success to ~100% even with no trigger), it is fit on
+    half of each source class's images and evaluated on the other half -
+    a real trigger transfers to unseen images, generic adversarial noise
+    much less so. The budget `eps` should be smaller than the global one.
+    """
+    lr = eps / 4
+    succ = np.zeros((C, C), dtype=np.float32)  # [s, c]
+    margin = np.zeros((C, C), dtype=np.float32)
+
+    train_idx, test_idx = {}, {}
+    for cls in range(C):
+        idx = (y == cls).nonzero(as_tuple=True)[0]
+        half = len(idx) // 2
+        train_idx[cls] = idx[:half]
+        test_idx[cls] = idx[half:]
+
+    for c in range(C):
+        sources = [s for s in range(C) if s != c]
+        tr_idx = torch.cat([train_idx[s] for s in sources])
+        src_of = torch.cat(
+            [torch.full((len(train_idx[s]),), si, dtype=torch.long) for si, s in enumerate(sources)]
+        ).to(device)
+        xs_tr = x[tr_idx].to(device)
+        tgt = torch.full((len(xs_tr),), c, device=device, dtype=torch.long)
+
+        delta = torch.zeros(len(sources), 1, 3, 64, 64, device=device, requires_grad=True)
+        for _ in range(steps):
+            d = delta[src_of, 0]  # each image perturbed by its own source's delta
+            out = net((xs_tr + d).clamp(0, 1))
+            loss = F.cross_entropy(out, tgt)
+            (g,) = torch.autograd.grad(loss, delta)
+            with torch.no_grad():
+                delta -= lr * g.sign()
+                delta.clamp_(-eps, eps)
+
+        with torch.no_grad():
+            for si, s in enumerate(sources):
+                xs_te = x[test_idx[s]].to(device)
+                out = net((xs_te + delta[si]).clamp(0, 1)).float()
+                succ[s, c] = (out.argmax(1) == c).float().mean().item()
+                other = out.clone()
+                other[:, c] = -1e9
+                margin[s, c] = (out[:, c] - other.max(1).values).mean().item()
+
+    return {"uap_src_succ": succ, "uap_src_margin": margin}
+
+
 # ----------------------------------------------------------------------------- extract command
 
 
@@ -149,6 +208,9 @@ def cmd_extract(args):
 
         if not args.no_uap:
             data.update(uap_stats(net, x, y, device, args.eps / 255.0, args.steps))
+
+        if not args.no_uap_src:
+            data.update(uap_src_stats(net, x, y, device, args.eps_src / 255.0, args.steps))
 
         np.savez(out_path, **data)
         done += 1
