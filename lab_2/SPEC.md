@@ -1,75 +1,66 @@
-# SPEC: Backdoor target-class detector (P2)
+# SPEC: Backdoor target-class detector (P2), simple version
 
 ## 1. Goal
-For each of the 200 test models and each of the 20 classes, output a suspicion score that the class is the target of a backdoor. The metric is ROC-AUC pooled over all 200×20 pairs (see `task.md`), so scores must be comparable across models. Beat the Neural Cleanse baseline (public AUC 0.901) with margin, because the private half contains more hard attacks.
+For each of the 200 test models and each of the 20 classes, output a suspicion score that the class is the target of a backdoor. The metric is ROC-AUC pooled over all 200×20 pairs (see `task.md`). Beat the Neural Cleanse baseline (public AUC 0.901).
 
 Deadline: 2026-11-23 16:00. Limit: 10 submissions/day.
 
 ## 2. Decisions
 | Topic | Decision |
 |---|---|
-| Core approach | Trigger inversion, Neural Cleanse + K-Arm style. No meta-classifier (MNTD is not viable with 400 images and no base model/training data). |
-| Compute budget | About 2 h per full run over 200 models on an RTX 3080 (10 GB), roughly 35 s/model. |
-| Trigger forms | Patch (mask+pattern), blended/additive perturbation, WaNet-like warp. |
-| Targeted (source-specific) backdoors | Explicit per-source scans. |
-| Cross-model comparability | Absolute score + population calibration across the 200 test models. |
-| Train models (6) | Smoke test and rough calibration only (3 positive pairs: far too few to fit anything). |
-| Self-made poisoned models | Not required. Optional stretch only. |
-| Real validation | Public leaderboard (submit the full pipeline; no ablation studies). |
+| Core approach | Plain Neural Cleanse trigger inversion (mask + pattern) with a K-Arm schedule to save compute. |
+| Trigger form | One: `x' = (1-m)·x + m·p`. A full-size, faint mask also covers blended triggers. |
+| Score | Neural Cleanse anomaly index of the mask L1 norms, computed within each model. |
+| Not included | Warp/blend forms, source-specific scans, population calibration, meta-classifier, self-made poisoned models, held-out splits. |
+| Validation | 6 train models as a smoke test, then the public leaderboard. |
+
+Known limitation (accepted for simplicity): source-specific (targeted) backdoors and WaNet-like warps are not modelled explicitly, so they are likely to be partially missed.
 
 ## 3. Inputs
-- `example/model.py`: `load(path, device)`; the net is ResNet-18 (no maxpool) with a cosine classifier head, input (N,3,64,64) in [0,1], normalisation inside.
-- `example/clean/` (400 images, 20 per class, `labels.csv`), `example/classes.txt`.
-- `example/train/` (6 labelled models), `test/models/*.pt` (200 models).
+- `example/model.py`: `load(path, device)`. ResNet-18, cosine head, input (N,3,64,64) in [0,1].
+- `example/clean/` (400 images, `labels.csv`), `example/train/` (6 labelled models), `test/models/*.pt` (200 models).
 
 ## 4. Method
 
-### 4.1 Data and model handling
-- Load the 400 clean images into one GPU tensor in [0,1]. Load models with `load(path, device="cuda")`, freeze all parameters, use autocast and `channels_last`.
-- Split the clean images with a fixed seed, stratified by class, into an optimisation split and a held-out split. Default 75/25 (15 and 5 images per class; 100 held-out images in total). The split fraction is a config value. The same split is used for every model, so scores stay comparable across models.
-- In the all-class scan (4.2), ASR is measured on held-out images.
+### 4.1 Per-class trigger inversion (Neural Cleanse)
+For target class `t` learn a mask `m = sigmoid(a)` of shape (1,64,64) and a pattern `p = sigmoid(q)` of shape (3,64,64):
 
-### 4.2 Batched all-class scan (K-Arm style)
-Optimise all 20 target classes in parallel. Trigger parameters have shape (20, …) and each step forwards 20×B non-target images (B ≈ 32–64) in one batch. Per form, minimise CE toward the target plus a size/smoothness penalty, with an adaptive λ (NC-style) so the trigger just reaches ASR ≈ 0.9 on the optimisation split.
+    x' = (1 - m) * x + m * p
+    loss_t = CE(net(x'), t) + λ_t * sum(m)
 
-- **A. Patch:** x' = (1−m)·x + m·p, m = sigmoid(a), penalty L1(m).
-- **B. Blended/additive:** x' = clip(x + δ), smooth/full-image δ, penalty L2/L∞ of δ (also covers SIG-like triggers).
-- **C. Warp:** x' = grid_sample(x, id + flow), low-resolution flow upsampled, penalty on flow magnitude + TV.
+- Images are the clean images whose label is not `t`.
+- Frozen model, Adam, bf16 autocast.
+- **Adaptive λ** (the NC trick): every few steps, if the attack success rate (ASR) in the last window is ≥ 0.9, raise λ (shrink the mask harder); otherwise lower it. The mask is therefore pushed to the smallest size that still reaches ASR ≈ 0.9.
+- Recorded norm for class `t`: the smallest `sum(m)` seen in a window with ASR ≥ 0.9. If the class never reached 0.9, use the final `sum(m)` (large, as it should be).
 
-Budget: about 100–150 Adam steps per form. K-Arm-style: a short first pass over all classes, then the remaining steps only on the top-K (≈ 5) classes per form.
+### 4.2 Batched over classes
+All 20 classes are optimised at once. Parameters have shape (20, ...). Each step draws `B` images per class and runs one forward pass of `20·B` images. Per-class losses are summed, so classes do not interact.
 
-Recorded per (model, class, form): trigger size at the ASR target (L1 of mask / L2 of δ / flow magnitude), ASR at a fixed small budget, final loss.
+### 4.3 K-Arm schedule
+1. **Warm-up:** all 20 classes for `S1` steps (default 60).
+2. **Focus:** keep the `K` classes (default 5) with the smallest recorded norm and run `S2` more steps (default 100) on them only, with a larger batch per class.
+3. The other classes keep their warm-up norm. Because they were ranked lower, they stay higher than the focused ones, which is what the anomaly index needs.
 
-### 4.3 Source-specific (targeted) scan
-- For each (source s, target t), optimise a trigger on the source-s images only (batched over the 380 pairs). A source class has only 20 images in total, so use all 20 for optimisation and no held-out ASR. The signal is the trigger size needed to flip the source class.
-- Check or penalise that the trigger does not move other-class images, since targeted backdoors leave other classes alone by design.
-- If this scan overfits in practice, fall back to 2-fold cross-fitting (optimise on 10, evaluate on the other 10, and swap).
-- Per-target score = max over sources of the calibrated pair score. Run for all targets if the time budget allows; otherwise for the top-K from 4.2 plus a random sample, decided from timing measurements.
+### 4.4 Score
+Per model, with `l1[c]` the recorded norm of class `c`:
 
-### 4.4 Scores and comparability
-- Take the log of each raw statistic, then robust z-score (median/MAD) per (class, form) across the 200 test models. The reference is the population, not the within-model spread, so clean models do not produce an artificial "outlier" class.
-- Also compute the classic NC within-model MAD anomaly index as an extra feature.
-- Final score per (model, class) = max over forms (and the targeted scan) of the calibrated z, or a small fixed-weight combination. Fusion stays low-capacity (hand-set or tiny logistic regression).
-- All values finite, and no artificial ties from clipping.
+    med = median(l1);  mad = 1.4826 * median(|l1 - med|)
+    score[c] = (med - l1[c]) / mad
+
+A small trigger gives a large positive score (NC anomaly index). Scores are finite; a tiny epsilon guards `mad`.
+
+Raw `(l1, asr)` per model are cached to disk, so scoring can be changed without rescanning.
 
 ## 5. Validation
-1. Smoke test on the 6 train models: backdoored models rank the target class high, clean models score lower, scale is plausible, runtime per model is measured.
-2. Public leaderboard: submit the full pipeline and check the AUC against 0.901. No ablation studies. Prefer principled changes over public-half tuning, because private is harder.
-3. Optional stretch: plant known triggers into clean models by short fine-tuning on the 400 images to measure recall per trigger type.
+1. Smoke test on the 6 train models: the 3 backdoored models should rank their target class near the top, clean models should score lower, and the time per model should extrapolate to about 2 h or less for 200 models.
+2. Submit to the public leaderboard and compare with 0.901.
+3. If below 0.901, the first lever is calibration (a population-level z-score of `log l1` across the 200 models). Add it only if needed.
 
-## 6. Timeline (from 2026-11-10)
-1. Days 1–2: loader, patch-form batched scan, smoke test, first submission (target: beat 0.901).
-2. Days 3–5: blend and warp forms, population calibration, timing profile (≤ 2 h per run).
-3. Days 6–8: targeted scan, integrate into the full pipeline.
-4. Days 9–12: freeze the pipeline, final full run, submit; keep a buffer before the deadline.
-
-## 7. Deliverables
-- Code under `src/lab_2/` (the previous implementation is ignored; check the layout before adding): data/model loading, scan forms, targeted scan, scoring/calibration, CSV writer.
-- CLI entrypoint (`lab_2 = lab_2.main:main` in `pyproject.toml`) that scans a model directory and caches per-model raw statistics, so scoring can be re-tuned without rescanning.
+## 6. Deliverables
+- `src/lab_2/scan.py` (data loading, inversion, K-Arm), `src/lab_2/scoring.py` (anomaly index, CSV, AUC), `src/lab_2/main.py` (CLI `lab_2`, with subcommands `scan` and `score`).
 - `submission.csv` with columns `id,c00..c19`.
 
-## 8. Acceptance checks
-- 6 train models: backdoored models rank their target class highest or near-highest, clean models score lower.
-- One-model timing extrapolates to ≤ ~2 h for 200 models.
-- CSV validity: 200 unique ids matching `test/models/*.pt`, 20 finite columns, no nan/inf.
+## 7. Acceptance checks
+- Train smoke test as in 5.1.
+- CSV validity: 200 unique ids matching `test/models/*.pt`, 20 finite columns.
 - Public AUC above 0.901.
