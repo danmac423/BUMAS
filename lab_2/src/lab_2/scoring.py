@@ -15,17 +15,48 @@ def anomaly_index(l1: np.ndarray) -> np.ndarray:
     return (med - l1) / (mad + EPS)
 
 
-def score_cache(cache_dir: Path, calibrate: bool = False) -> pd.DataFrame:
-    """Per-model anomaly index, or (calibrate) a population z-score of log l1 per class."""
+METHODS = ("nc", "class", "global", "robust", "robust_global", "mix")
+
+
+def _load(cache_dir: Path) -> tuple[list[str], np.ndarray]:
     paths = sorted(Path(cache_dir).glob("*.npz"))
-    l1 = np.stack([np.load(p)["l1"] for p in paths])  # (models, 20)
-    if calibrate:
-        z = np.log(l1 + EPS)
-        scores = -(z - z.mean(0)) / (z.std(0) + EPS)
+    return [p.stem for p in paths], np.stack([np.load(p)["l1"] for p in paths])  # (models, 20)
+
+
+def _loc_scale(z: np.ndarray, robust: bool, per_class: bool) -> tuple[np.ndarray, np.ndarray]:
+    axis = 0 if per_class else None
+    if robust:
+        loc = np.median(z, axis=axis)
+        scale = 1.4826 * np.median(np.abs(z - loc), axis=axis)
     else:
-        scores = np.stack([anomaly_index(row) for row in l1])
+        loc, scale = z.mean(axis=axis), z.std(axis=axis)
+    return loc, scale + EPS
+
+
+def score_cache(cache_dir: Path, method: str = "nc", ref_cache: Path | None = None) -> pd.DataFrame:
+    """Scores per model and class; larger means more suspicious.
+
+    nc: per-model Neural Cleanse anomaly index.
+    class / global: population z-score of log l1, per class or over all pairs.
+    robust / robust_global: the same with median and MAD.
+    mix: mean of the robust per-class z-score and the nc index.
+    The population statistics come from `ref_cache` if given, else from `cache_dir` itself.
+    """
+    ids, l1 = _load(cache_dir)
+    z = np.log(l1 + EPS)
+    nc = np.stack([anomaly_index(row) for row in l1])
+    if method == "nc":
+        scores = nc
+    else:
+        ref = z if ref_cache is None else np.log(_load(ref_cache)[1] + EPS)
+        robust = method in ("robust", "robust_global", "mix")
+        per_class = method in ("class", "robust", "mix")
+        loc, scale = _loc_scale(ref, robust, per_class)
+        scores = -(z - loc) / scale
+        if method == "mix":
+            scores = (scores + nc) / 2
     df = pd.DataFrame(scores, columns=[f"c{i:02d}" for i in range(20)])
-    df.insert(0, "id", [p.stem for p in paths])
+    df.insert(0, "id", ids)
     return df
 
 
