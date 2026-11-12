@@ -1,6 +1,7 @@
 import torch
 
-from lab_2.data import N_CLASSES, PER_CLASS_HALF, split_ab
+from lab_2.config import N_CLASSES, PER_CLASS_HALF
+from lab_2.data import split_ab
 
 
 def test_split_ab_is_stratified_and_disjoint():

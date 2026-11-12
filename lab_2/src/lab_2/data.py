@@ -7,8 +7,7 @@ import pandas as pd
 import torch
 from PIL import Image
 
-N_CLASSES = 20
-PER_CLASS_HALF = 10
+from lab_2.config import N_CLASSES, PER_CLASS_HALF, SPLIT_SEED
 
 
 def load_clean(clean_dir: Path) -> tuple[torch.Tensor, torch.Tensor, list[str]]:
@@ -23,7 +22,7 @@ def load_clean(clean_dir: Path) -> tuple[torch.Tensor, torch.Tensor, list[str]]:
     return x, y, df["id"].tolist()
 
 
-def split_ab(labels: torch.Tensor, seed: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+def split_ab(labels: torch.Tensor, seed: int = SPLIT_SEED) -> tuple[torch.Tensor, torch.Tensor]:
     """Stratified split: PER_CLASS_HALF images per class go to A (optimisation), the rest to B (evaluation).
 
     Returns sorted index tensors (idx_a, idx_b).

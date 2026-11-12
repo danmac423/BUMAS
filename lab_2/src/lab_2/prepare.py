@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+from lab_2.config import SPLIT_SEED
 from lab_2.data import load_clean, split_ab
 from lab_2.model import load
 
@@ -34,7 +35,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=Path("."))
     ap.add_argument("--out", type=Path, default=Path("artifacts"))
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
