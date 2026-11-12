@@ -28,13 +28,12 @@ def main() -> None:
     p.add_argument("--labels", type=Path, default=None, help="labels.csv to report AUC (train smoke test)")
 
     p.add_argument("--method", choices=scoring.METHODS, default="nc")
-    p.add_argument("--ref", type=Path, default=None, help="cache whose population gives the calibration statistics")
 
     args = parser.parse_args()
     if args.cmd == "scan":
         scan.scan_all(args.models, args.data, args.cache, args.device, s1=args.s1, s2=args.s2, k=args.k, b1=args.b1, b2=args.b2)
     else:
-        df = scoring.score_cache(args.cache, args.method, args.ref)
+        df = scoring.score_cache(args.cache, args.method)
         if args.models:
             scoring.check_csv(df, args.models)
         scoring.write_csv(df, args.out)

@@ -1,12 +1,15 @@
 """Neural Cleanse trigger inversion, batched over classes, with a K-Arm schedule."""
 
 import importlib.util
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
+from torch import nn
 from PIL import Image
 from tqdm import tqdm
 
@@ -18,7 +21,7 @@ LAMBDA_STEP = 1.5
 LR = 0.1
 
 
-def load_model_fn(data_root: Path):
+def load_model_fn(data_root: Path) -> Callable[[Path, str], nn.Module]:
     """Import `load` from `<data_root>/model.py`."""
     spec = importlib.util.spec_from_file_location("p2_model", Path(data_root) / "model.py")
     module = importlib.util.module_from_spec(spec)
@@ -38,7 +41,15 @@ def load_clean(clean_dir: Path) -> tuple[torch.Tensor, torch.Tensor]:
     return x, torch.tensor(df["label"].to_numpy(), dtype=torch.long)
 
 
-def _optimise(net, x, labels, state, idx, steps, batch):
+def _optimise(
+    net: nn.Module,
+    x: torch.Tensor,
+    labels: torch.Tensor,
+    state: dict[str, torch.Tensor],
+    idx: torch.Tensor,
+    steps: int,
+    batch: int,
+) -> None:
     """Run `steps` Adam steps on the classes `idx` only; update `state` in place.
 
     state: dict of tensors a (20,1,64,64), q (20,3,64,64), lam (20,), best (20,), asr (20,), l1 (20,).
@@ -92,12 +103,21 @@ def _optimise(net, x, labels, state, idx, steps, batch):
         state["l1"][idx] = torch.sigmoid(a).flatten(1).sum(1).detach()
 
 
-def _recorded(state) -> torch.Tensor:
+def _recorded(state: dict[str, torch.Tensor]) -> torch.Tensor:
     """Smallest norm at ASR >= 0.9, or the current norm if never reached."""
     return torch.where(torch.isfinite(state["best"]), state["best"], state["l1"])
 
 
-def scan_model(net, x, labels, s1=150, s2=100, k=5, b1=8, b2=32) -> tuple[np.ndarray, np.ndarray]:
+def scan_model(
+    net: nn.Module,
+    x: torch.Tensor,
+    labels: torch.Tensor,
+    s1: int = 150,
+    s2: int = 100,
+    k: int = 5,
+    b1: int = 8,
+    b2: int = 32,
+) -> tuple[np.ndarray, np.ndarray]:
     """Return (l1, asr), each of shape (20,)."""
     device = x.device
     state = {
@@ -117,7 +137,7 @@ def scan_model(net, x, labels, s1=150, s2=100, k=5, b1=8, b2=32) -> tuple[np.nda
     return _recorded(state).cpu().numpy(), state["asr"].cpu().numpy()
 
 
-def scan_all(models_dir: Path, data_root: Path, out_dir: Path, device: str = "cuda", **kw) -> None:
+def scan_all(models_dir: Path, data_root: Path, out_dir: Path, device: str = "cuda", **kw: Any) -> None:
     """Scan every `*.pt` in models_dir; cache (l1, asr) as `<id>.npz` in out_dir."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
