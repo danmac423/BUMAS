@@ -1,0 +1,41 @@
+[project]
+name = "lab_2"
+version = "0.1.0"
+description = "P2 Backdoors: detecting backdoor target classes in 200 ResNet-18 models"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.0.0",
+    "pandas>=3.1.0",
+    "pillow>=13.0.0",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+prepare = "lab_2.prepare:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "ruff>=0.17.1"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-ra --strict-markers"
+pythonpath = ["src"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
