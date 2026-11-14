@@ -19,12 +19,31 @@ from lab_2.model import load
 
 @torch.no_grad()
 def accuracy(net, x: torch.Tensor, y: torch.Tensor, device: str, batch: int = 200) -> torch.Tensor:
-    """Per-image correctness (N,) bool."""
+    """Checks which images a model classifies correctly.
+
+    Args:
+        net: Classifier in eval mode.
+        x: Images (N, 3, 64, 64) in [0, 1].
+        y: True labels (N,).
+        device: Device the network lives on; batches are moved there on the fly.
+        batch: Number of images per forward pass.
+
+    Returns:
+        Bool tensor (N,) on CPU, True where the prediction equals the label.
+    """
     preds = [net(x[i : i + batch].to(device)).argmax(1).cpu() for i in range(0, len(x), batch)]
     return torch.cat(preds) == y
 
 
 def model_paths(root: Path) -> list[tuple[str, Path]]:
+    """Lists every model file of the data set.
+
+    Args:
+        root: Directory that holds `example/` and `test/`.
+
+    Returns:
+        Pairs `(group, path)` with group "train" (labelled models) or "test", each group sorted by file name.
+    """
     out = []
     for group, sub in (("train", root / "example" / "train" / "models"), ("test", root / "test" / "models")):
         out += [(group, p) for p in sorted(sub.glob("*.pt"))]
@@ -32,6 +51,7 @@ def model_paths(root: Path) -> list[tuple[str, Path]]:
 
 
 def main() -> None:
+    """Command-line entry point: saves the A/B split and the clean accuracy of every model."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=Path("."))
     ap.add_argument("--out", type=Path, default=Path("artifacts"))

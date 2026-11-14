@@ -16,16 +16,24 @@ import torch
 from tqdm import tqdm
 
 from lab_2.data import load_clean, split_ab
-from lab_2.model import Net, load
+from lab_2.model import Net
 from lab_2.prepare import accuracy
 
 FC_WEIGHT = "r.fc.weight"
 
 
 def average_state_dicts(paths: list[Path]) -> dict[str, torch.Tensor]:
-    """Streaming mean of float parameters/buffers, with unit-norm rows for the cosine layer.
+    """Averages the weights of many models, loading one model at a time.
 
-    Integer buffers (BatchNorm's num_batches_tracked) are taken from the first model.
+    Rows of the cosine output layer are normalised to unit length before summing (their length is
+    seed-dependent and irrelevant to the classifier) and once more after averaging.
+    Integer buffers (BatchNorm's num_batches_tracked) cannot be averaged and are taken from the first model.
+
+    Args:
+        paths: Paths of the state dicts to average.
+
+    Returns:
+        State dict of the averaged model with float32 tensors.
     """
     total: dict[str, torch.Tensor] = {}
     first: dict[str, torch.Tensor] = {}
@@ -45,12 +53,22 @@ def average_state_dicts(paths: list[Path]) -> dict[str, torch.Tensor]:
 
 
 def build_mean_model(state: dict[str, torch.Tensor], device: str = "cpu") -> Net:
+    """Creates a network from an averaged state dict.
+
+    Args:
+        state: State dict returned by `average_state_dicts`.
+        device: Device to move the network to.
+
+    Returns:
+        The network in eval mode.
+    """
     net = Net()
     net.load_state_dict(state)
     return net.to(device).eval()
 
 
 def main() -> None:
+    """Command-line entry point: averages the test models, saves the result and prints its clean accuracy."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=Path("."))
     ap.add_argument("--out", type=Path, default=Path("artifacts"))

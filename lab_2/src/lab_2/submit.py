@@ -24,7 +24,20 @@ from lab_2.triggers import FAMILIES
 
 
 def load_stage5(art: Path, group: str, ids: list[str], rounds: int = 1) -> torch.Tensor:
-    """[n_models, n_families * rounds, 2, 20] scores of the stage-5 results, in the order of `ids`."""
+    """Loads the saved stage-5 scores.
+
+    Args:
+        art: Artifacts directory.
+        group: "train" or "test".
+        ids: Model ids; the output follows this order.
+        rounds: Number of optimisation rounds to load per family.
+
+    Returns:
+        Tensor (n_models, n_families * rounds, 2, 20); families are in alphabetical order.
+
+    Raises:
+        FileNotFoundError: If a result file is missing.
+    """
     per_model = []
     for mid in ids:
         rows = []
@@ -39,7 +52,18 @@ def load_stage5(art: Path, group: str, ids: list[str], rounds: int = 1) -> torch
 
 
 def load_scores(art: Path, group: str, sources: list[str], rounds: int = 1) -> tuple[list[str], torch.Tensor]:
-    """Ids and the concatenated scores of the chosen sources for a group ('train' or 'test')."""
+    """Loads and concatenates the scores of the chosen sources.
+
+    Args:
+        art: Artifacts directory.
+        group: "train" or "test".
+        sources: Any of "quicktest" and "stage5".
+        rounds: Stage-5 rounds to include.
+
+    Returns:
+        Tuple `(ids, scores)` with scores of shape (n_models, n_triggers, 2, 20). The sources are joined along
+        the trigger axis, so they share one normalisation and one maximum.
+    """
     ids, parts = None, []
     if "quicktest" in sources:
         qt = torch.load(art / f"quicktest_{group}.pt", weights_only=True)
@@ -54,22 +78,64 @@ def load_scores(art: Path, group: str, sources: list[str], rounds: int = 1) -> t
 
 
 def robust_stats(scores: torch.Tensor, cfg: NormCfg = NORM) -> tuple[torch.Tensor, torch.Tensor]:
-    """Median and floored MAD over the model axis (0). scores: [n_models, n_triggers, 2, 20]."""
+    """Estimates the background level and spread of every (trigger, score type, class) cell.
+
+    About half of the models are clean, so the median over models describes the background.
+
+    Args:
+        scores: Tensor (n_models, n_triggers, 2, 20).
+        cfg: MAD scale and floor.
+
+    Returns:
+        Tuple `(median, mad)`, each (n_triggers, 2, 20). The MAD is scaled to match a standard deviation and
+        floored, because scores move in steps of 1/20 and the raw MAD is often exactly 0.
+    """
     med = scores.median(dim=0).values
     mad = cfg.mad_scale * (scores - med).abs().median(dim=0).values
     return med, mad.clamp(min=cfg.mad_floor)
 
 
 def normalise(scores: torch.Tensor, med: torch.Tensor, mad: torch.Tensor) -> torch.Tensor:
+    """Computes the robust z-score of every value.
+
+    Args:
+        scores: Tensor (n_models, n_triggers, 2, 20).
+        med: Medians from `robust_stats`, broadcast over the model axis.
+        mad: Floored MADs from `robust_stats`.
+
+    Returns:
+        Tensor of the same shape as `scores`.
+    """
     return (scores - med) / mad
 
 
 def pair_scores(scores: torch.Tensor, med: torch.Tensor, mad: torch.Tensor) -> torch.Tensor:
-    """[n_models, 20]: max of normalised scores over triggers and score types."""
+    """Computes the final suspicion score of every model x class pair.
+
+    Normalising first makes the scores mean the same in every model, class and trigger family, which the
+    global ROC-AUC requires.
+
+    Args:
+        scores: Tensor (n_models, n_triggers, 2, 20).
+        med: Medians from `robust_stats`.
+        mad: Floored MADs from `robust_stats`.
+
+    Returns:
+        Tensor (n_models, 20): maximum of the normalised scores over triggers and both score types.
+    """
     return normalise(scores, med, mad).amax(dim=(1, 2))
 
 
 def check_submission(df: pd.DataFrame, expected_ids: list[str]) -> None:
+    """Checks the rules of the submission portal before the file is written.
+
+    Args:
+        df: Submission table with columns `id, c00..c19`.
+        expected_ids: Ids of all test models.
+
+    Raises:
+        AssertionError: If the columns are wrong, an id is duplicated or missing, or a value is nan/inf.
+    """
     assert list(df.columns) == ["id"] + [f"c{c:02d}" for c in range(N_CLASSES)], "wrong columns"
     assert df["id"].is_unique, "duplicate ids"
     assert set(df["id"]) == set(expected_ids), "ids differ from the test models"
@@ -78,6 +144,20 @@ def check_submission(df: pd.DataFrame, expected_ids: list[str]) -> None:
 
 
 def write_csv(ids: list[str], pairs: torch.Tensor, path: Path, expected_ids: list[str]) -> pd.DataFrame:
+    """Validates and writes the submission file.
+
+    Args:
+        ids: Model ids, one per row of `pairs`.
+        pairs: Scores (n_models, 20).
+        path: Output CSV path; missing parent directories are created.
+        expected_ids: Ids of all test models.
+
+    Returns:
+        The written table.
+
+    Raises:
+        AssertionError: If `check_submission` fails; nothing is written then.
+    """
     df = pd.DataFrame(pairs.numpy(), columns=[f"c{c:02d}" for c in range(N_CLASSES)])
     df.insert(0, "id", ids)
     check_submission(df, expected_ids)
@@ -87,6 +167,7 @@ def write_csv(ids: list[str], pairs: torch.Tensor, path: Path, expected_ids: lis
 
 
 def main() -> None:
+    """Command-line entry point: normalises the scores, writes the submission CSV and sanity-checks on train."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=Path("."))
     ap.add_argument("--art", type=Path, default=Path("artifacts"))

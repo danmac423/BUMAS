@@ -33,7 +33,17 @@ class OptCfg:
 
 
 def kl_disagreement(logits_m: torch.Tensor, logits_ref: torch.Tensor, exclude: tuple[int, ...] = ()) -> torch.Tensor:
-    """Mean over the batch of KL(p_model || p_ref), with `exclude` classes removed before the softmax."""
+    """Computes the KL divergence between the examined model and the reference model.
+
+    Args:
+        logits_m: Logits of the examined model (N, 20).
+        logits_ref: Logits of the averaged model (N, 20).
+        exclude: Classes removed from both distributions before the softmax, so that an already found
+            target cannot dominate the objective.
+
+    Returns:
+        Scalar tensor: mean over the batch of KL(p_model || p_ref).
+    """
     if exclude:
         keep = torch.ones(logits_m.shape[1], dtype=torch.bool, device=logits_m.device)
         keep[list(exclude)] = False
@@ -50,10 +60,26 @@ def optimise(
     cfg: OptCfg = OptCfg(),
     exclude: tuple[int, ...] = (),
 ) -> list[float]:
-    """Run Adam on the trigger parameters; returns the KL value per step."""
+    """Optimises a trigger so that the examined model and the averaged model disagree on triggered images.
+
+    The trigger is reset first, then Adam maximises the KL divergence (minus the trigger's penalty) on random
+    mini-batches of half A. Both networks are frozen; the gradient only reaches the trigger parameters.
+
+    Args:
+        net: Examined model.
+        mean_net: Averaged reference model.
+        trigger: Learnable trigger, modified in place.
+        x_a: Half-A images (N, 3, 64, 64) in [0, 1].
+        cfg: Optimisation hyper-parameters.
+        exclude: Classes hidden from the KL objective.
+
+    Returns:
+        The KL value of every step (before that step's update).
+    """
     device = next(net.parameters()).device
     trigger.to(device).reset(cfg.seed)
     for m in (net, mean_net):
+        # frozen weights: gradients still flow through the networks to the trigger, but no weight gets a .grad
         m.eval().requires_grad_(False)
     opt = torch.optim.Adam(trigger.parameters(), lr=cfg.lr)
     g = torch.Generator().manual_seed(cfg.seed)
@@ -62,6 +88,7 @@ def optimise(
         idx = torch.randperm(len(x_a), generator=g)[: cfg.batch]
         xt = trigger(x_a[idx].to(device))
         kl = kl_disagreement(net(xt), mean_net(xt), exclude)
+        # we want to maximise KL, so it enters the loss with a minus sign
         loss = -kl + cfg.penalty_weight * trigger.penalty()
         opt.zero_grad()
         loss.backward()
@@ -72,17 +99,56 @@ def optimise(
 
 @torch.no_grad()
 def evaluate(net, mean_net, trigger, x_b, y_b) -> dict[str, torch.Tensor]:
-    """Column scores of the flip table difference on half B."""
+    """Judges a trigger on held-out images.
+
+    Args:
+        net: Examined model.
+        mean_net: Averaged reference model.
+        trigger: Trigger to apply (already optimised, in eval mode).
+        x_b: Half-B images (N, 3, 64, 64).
+        y_b: Half-B labels (N,).
+
+    Returns:
+        Dict with "all" and "targeted" scores (20,) of the flip table difference, see `column_scores`.
+    """
     diff = flip_table(net, x_b, y_b, trigger) - flip_table(mean_net, x_b, y_b, trigger)
     return column_scores(diff)
 
 
 def result_path(out: Path, group: str, model_id: str, family: str, rnd: int = 0) -> Path:
+    """Builds the path of a saved stage-5 result.
+
+    Args:
+        out: Artifacts directory.
+        group: "train" or "test".
+        model_id: Id of the examined model.
+        family: Trigger family name (patch, blend, warp or stripe).
+        rnd: Optimisation round (stage 6 adds later rounds).
+
+    Returns:
+        Path `<out>/stage5/<group>/<model_id>_<family>_r<rnd>.pt`.
+    """
     return out / "stage5" / group / f"{model_id}_{family}_r{rnd}.pt"
 
 
 def run_one(net, mean_net, family: str, x, y, ia, ib, cfg: OptCfg, exclude: tuple[int, ...] = ()) -> dict:
-    """Optimise one family on one model and score it on half B -> the dict that gets saved."""
+    """Optimises one trigger family on one model and scores it on half B.
+
+    Args:
+        net: Examined model.
+        mean_net: Averaged reference model.
+        family: Key of `FAMILIES`.
+        x: All clean images (400, 3, 64, 64).
+        y: Their labels (400,).
+        ia: Indices of half A (used for optimisation).
+        ib: Indices of half B (used for evaluation).
+        cfg: Optimisation hyper-parameters.
+        exclude: Classes hidden from the KL objective.
+
+    Returns:
+        Dict that gets saved: "scores" (2, 20) with rows (all, targeted), "kl" (last step), "kl_start",
+        "exclude" and "trigger_state" (the learned parameters on CPU).
+    """
     trigger = FAMILIES[family]()
     hist = optimise(net, mean_net, trigger, x[ia], cfg, exclude)
     s = evaluate(net, mean_net, trigger.eval(), x[ib], y[ib])
@@ -96,6 +162,7 @@ def run_one(net, mean_net, family: str, x, y, ia, ib, cfg: OptCfg, exclude: tupl
 
 
 def main() -> None:
+    """Command-line entry point: runs stage 5 on a group of models and saves one result file per family."""
     ap = argparse.ArgumentParser(description="stage 5: optimise trigger families on a group of models, save results")
     ap.add_argument("--root", type=Path, default=Path("."))
     ap.add_argument("--out", type=Path, default=Path("artifacts"))
