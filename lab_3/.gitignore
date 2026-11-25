@@ -1,4 +1,15 @@
 data/
+outputs/
+p3_student.zip
+
+# Model weights (about 1.4 GB); the code and small text files stay tracked
+src/lab_3/model/llm/
+src/lab_3/model/vision/
+src/lab_3/model/connector.pt
+
+# Cached per-token losses and the generated submission
+artifacts/
+submission.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
