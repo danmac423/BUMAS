@@ -20,6 +20,10 @@ test:
 
 check: lint typecheck test
 
+run:
+	uv run python -m lab_3.compute_losses
+	uv run python -m lab_3.make_submission
+
 clean:
 	find . -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache \) -not -path "./.venv/*" -prune -exec rm -rf {} +
 	rm -rf .coverage coverage.xml htmlcov dist build *.egg-info
