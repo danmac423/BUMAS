@@ -1,39 +1,33 @@
 # lab_3 (P3): czy trenowali na moich danych?
 
-Atak MIA na BUMAS-mini. Wynik wysłanego zgłoszenia: **TPR@5%FPR = 0,757** na `test.jsonl` (próg zaliczenia 0,7).
+Atak MIA na BUMAS-mini z regresją logistyczną. Wynik na `test.jsonl`: **TPR@5%FPR = 0,616** (zgłoszenie #278),
+co przebija baseline ze strony z wynikami. Wcześniejsza wersja z regułą dla właścicieli (commit `7e0a352`) dała 0,757.
 Treść zadania: `task.md`.
 
 ## Metoda
 
-Niczego nie trenujemy.
+Modeli językowych nie trenujemy.
 
 1. **Straty.** Dla każdego tokenu liczymy `-log p(token)` w BUMAS-mini i w modelu odniesienia, czyli BUMAS-mini
    z LLM podmienionym na publiczny `Qwen3-0.6B-Base`. Dla zdjęć liczą się tylko tokeny podpisu.
 2. **Sygnał rekordu.** `d = strata_odniesienia - strata_BUMAS` obcinamy do ±2 i liczymy
    `s = średnia(d) / odchylenie(d) * sqrt(liczba tokenów)`.
-3. **Wspólna skala.** `z = (s - μ) / σ`, gdzie `μ` i `σ` pochodzą ze znanych non-memberów tego samego `source_type`.
-4. **Wynik.**
-   - Pojedyncze posty i zdjęcia: `z`.
-   - Zbiory (pisarze, grupy badawcze, podcasty, fotografowie): średnie `z` testowych rekordów właściciela
-     `+ 0,01 * z` rekordu, a jeśli właściciel ma w `known` rekord member, jeszcze `+ 10`.
+3. **Regresja logistyczna**, osobna dla każdego `source_type`, dopasowana na `known.jsonl`, bez regularyzacji.
+   - Pojedyncze posty i zdjęcia: jedna cecha, `s` rekordu.
+   - Zbiory (pisarze, grupy badawcze, podcasty, fotografowie): `s` rekordu i średnie `s` testowych rekordów
+     właściciela.
 
-## Dlaczego oceniamy całych właścicieli
-
-Zgłoszenie oceniające rekordy osobno (te same straty, regresja logistyczna, właściciele bez znanego membera na końcu
-rankingu) dało 0,466. Rozkłady sygnału w `test` pokazały, że część właścicieli bez żadnego znanego membera ma
-wyraźnie wysoki sygnał we wszystkich rekordach testowych (u pisarzy 8 właścicieli ze średnim `z` od 2,3 do 3,6,
-pozostali najwyżej 0,86; podobnie u grup badawczych i podcastów). Po uśrednieniu po właścicielu wynik wzrósł
-do 0,757.
+   Wynikiem jest logarytm szans, więc rekordy wszystkich typów trafiają do jednego rankingu.
 
 ## Ograniczenia
 
-- Założenie o właścicielach wynika z rozkładów w `test` (bez etykiet) i jednego zgłoszenia, które je sprawdziło.
-  Nie dowodzi etykiety żadnego konkretnego rekordu.
-- Metoda potrzebuje wszystkich testowych rekordów właściciela naraz i zadziała gorzej, jeśli zbiór miesza rekordy
-  member i non-member.
-- Próg obcięcia ±2 dobraliśmy na `known` (progi od 1 do 5 działają tam podobnie). Na `test` sprawdziliśmy tylko ±2.
-- Stałych 0,01 i 10 nie porównywaliśmy z innymi na `test`.
-- Walidacja na `known` nie przewiduje wyniku na `test`, bo zbiory właścicieli są tam zbudowane inaczej.
+- Walidacja na `known` nie przewiduje wyniku na `test`: reguła z commita `7e0a352` miała na `known` dużo gorszy
+  wynik niż regresja, a na `test` lepszy. Prawdopodobnie zbiory właścicieli są w tych plikach zbudowane inaczej.
+- Wysłany plik #278 powstał z cechami po normalizacji względem znanych non-memberów i z minimalną regularyzacją.
+  Obecny kod jest prostszy i nie ma żadnej z nich, a daje ten sam ranking 5000 rekordów (sprawdzone).
+- Metoda potrzebuje wszystkich testowych rekordów właściciela naraz.
+- Próg obcięcia ±2 dobraliśmy na `known`. Na `test` ta sama regresja bez obcinania dała 0,584 (zgłoszenie #279);
+  innych progów na `test` nie sprawdzaliśmy.
 
 ## Uruchomienie
 

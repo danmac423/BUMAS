@@ -17,23 +17,29 @@ def test_record_signal_clips_extreme_tokens():
     assert extreme == pytest.approx(clipped)
 
 
-def test_collection_records_share_the_owner_mean_and_known_member_owners_come_first():
-    known = [
-        make_record("n1", "writer", "other", 0),
-        make_record("n2", "writer", "other", 0),
-        make_record("m", "writer", "A", 1),
-        make_record("p1", "forum post", "u1", 0),
-        make_record("p2", "forum post", "u2", 0),
-    ]
-    test = [
-        make_record("a", "writer", "A"),
-        make_record("b1", "writer", "B"),
-        make_record("b2", "writer", "B"),
-        make_record("post", "forum post", "u3"),
-    ]
-    # known non-members: mean 0 and standard deviation 1 in both types, so the z-score equals the signal
-    signals = {"n1": -1.0, "n2": 1.0, "m": 5.0, "p1": -1.0, "p2": 1.0, "a": 0.0, "b1": 2.0, "b2": 4.0, "post": 2.5}
+def fit_and_score(source_type: str, known_rows: list[tuple], test_rows: list[tuple]) -> list[float]:
+    """Rows are (owner, signal, member) for known records and (owner, signal) for test records."""
+    known = [make_record(f"k{i}", source_type, owner, member) for i, (owner, _, member) in enumerate(known_rows)]
+    test = [make_record(f"t{i}", source_type, owner) for i, (owner, _) in enumerate(test_rows)]
+    signals = {f"k{i}": row[1] for i, row in enumerate(known_rows)}
+    signals |= {f"t{i}": row[1] for i, row in enumerate(test_rows)}
+    return membership_scores(known, test, signals)
 
-    scores = membership_scores(known, test, signals)
 
-    assert scores == pytest.approx([10.0, 3.0 + 0.02, 3.0 + 0.04, 2.5])
+def test_single_records_are_ranked_by_their_own_signal_only():
+    known = [("a", 1.0, 0), ("b", 2.0, 1), ("c", 3.0, 0), ("d", 4.0, 1)]
+
+    scores = fit_and_score("forum post", known, [("a", 1.5), ("a", 3.5), ("e", 3.5)])
+
+    assert scores[0] < scores[1]
+    assert scores[1] == pytest.approx(scores[2])
+
+
+def test_collection_records_also_use_the_mean_signal_of_their_owner():
+    # the owner "high" (test mean 4) has more known members than the owner "low" (test mean 1)
+    known = [("high", 1.0, 0), ("high", 2.0, 1), ("high", 2.5, 0), ("high", 3.0, 1)]
+    known += [("low", 0.5, 0), ("low", 2.0, 0), ("low", 3.0, 1), ("low", 3.5, 0)]
+
+    scores = fit_and_score("writer", known, [("high", 2.0), ("high", 6.0), ("low", 2.0), ("low", 0.0)])
+
+    assert scores[0] > scores[2]  # the same own signal, but a different owner

@@ -1,10 +1,9 @@
-"""Steps 2-4: turn the token losses into one membership score per test record.
+"""Steps 2-3: turn the token losses into one membership score per test record.
 
 2. One number per record: the t-statistic of (reference loss - BUMAS loss) over its tokens.
-3. Common scale: how many standard deviations it lies above the known non-members of the same source_type.
-4. Single posts and photos keep their own value. Records of a collection (writer, research group, podcast,
-   photographer) get the mean value of all test records of their owner, because an owner's test records turned out
-   to be members or non-members together. Owners with a known member go to the top.
+3. A logistic regression for every source_type, fitted on known.jsonl. Its features are the record's own number
+   and, for a collection (writer, research group, podcast, photographer), the mean number of all test records of
+   the owner. The score is the log-odds of membership, so the records of all types can be ranked together.
 
 Labels of test records are never used (there are none).
 
@@ -17,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from sklearn.linear_model import LogisticRegression
 
 from lab_3.compute_losses import OUTPUT as LOSSES
 from lab_3.compute_losses import read_records
@@ -24,8 +24,6 @@ from lab_3.compute_losses import read_records
 SUBMISSION = Path("outputs/solution.csv")
 COLLECTION_TYPES = {"writer", "research group", "podcast", "photographer"}
 CLIP = 2.0  # limit of a single token's difference; chosen on known.jsonl, limits from 1 to 5 work similarly
-OWN_RECORD_WEIGHT = 0.01  # only orders the records of one owner, which would otherwise be tied
-KNOWN_MEMBER_BONUS = 10.0  # large enough to put these owners above all other records
 
 
 def record_signal(reference: torch.Tensor, bumas: torch.Tensor) -> float:
@@ -38,35 +36,29 @@ def record_signal(reference: torch.Tensor, bumas: torch.Tensor) -> float:
 
 
 def membership_scores(known: list[dict], test: list[dict], signals: dict[str, float]) -> list[float]:
-    """Return one score for every test record; a higher score means a stronger suspicion of membership."""
-    # Step 3: signals of different source types are not comparable, e.g. short captions and long transcripts.
-    non_members = defaultdict(list)
-    for record in known:
-        if not record["member"]:
-            non_members[record["source_type"]].append(signals[record["id"]])
-    scale = {source_type: (np.mean(values), np.std(values)) for source_type, values in non_members.items()}
+    """Return one score for every test record; a higher score means a stronger suspicion of membership.
 
-    def z_score(record: dict) -> float:
-        mean, std = scale[record["source_type"]]
-        return float((signals[record["id"]] - mean) / std)
-
-    # Step 4: collect the evidence of every owner from all of its test records.
-    owner_values = defaultdict(list)
+    Every owner of a known collection record must also have test records.
+    """
+    owner_signals = defaultdict(list)
     for record in test:
-        owner_values[record["source_type"], record["source"]].append(z_score(record))
-    owners_with_member = {(r["source_type"], r["source"]) for r in known if r["member"]}
+        owner_signals[record["source_type"], record["source"]].append(signals[record["id"]])
 
-    scores = []
-    for record in test:
-        if record["source_type"] not in COLLECTION_TYPES:
-            scores.append(z_score(record))
-            continue
-        owner = record["source_type"], record["source"]
-        score = float(np.mean(owner_values[owner])) + OWN_RECORD_WEIGHT * z_score(record)
-        if owner in owners_with_member:
-            score += KNOWN_MEMBER_BONUS
-        scores.append(score)
-    return scores
+    def features(record: dict) -> list[float]:
+        values = [signals[record["id"]]]
+        if record["source_type"] in COLLECTION_TYPES:
+            values.append(float(np.mean(owner_signals[record["source_type"], record["source"]])))
+        return values
+
+    # A separate model for every type: their signals are on different scales, e.g. short captions and long transcripts.
+    models = {}
+    for source_type in sorted({record["source_type"] for record in known}):
+        records = [record for record in known if record["source_type"] == source_type]
+        # C=inf: no regularisation. The strict tolerance makes sure that the fit has converged.
+        model = LogisticRegression(C=np.inf, solver="newton-cholesky", tol=1e-10, max_iter=1000)
+        models[source_type] = model.fit([features(r) for r in records], [r["member"] for r in records])
+
+    return [float(models[r["source_type"]].decision_function([features(r)])[0]) for r in test]
 
 
 def main() -> None:
